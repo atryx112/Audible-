@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Pulse Tone Generator</title>
+  <style>
+    body { font-family: sans-serif; padding: 2rem; max-width: 400px; margin: auto; }
+    label { display: block; margin: 1em 0 0.2em; }
+    input { width: 100%; padding: 0.4em; font-size: 1em; }
+    button { margin-top: 1em; padding: 0.6em 1.2em; font-size: 1em; }
+  </style>
+</head>
+<body>
+  <h2>Pulse Tone Generator</h2>
+
+  <label for="freq">Frequency (Hz):</label>
+  <input type="number" id="freq" value="1000" min="1" max="20000">
+
+  <label for="onTime">Beep duration (ms):</label>
+  <input type="number" id="onTime" value="200" min="1">
+
+  <label for="offTime">Pause duration (ms):</label>
+  <input type="number" id="offTime" value="300" min="0">
+
+  <label for="count">Repeat count (0 = ∞):</label>
+  <input type="number" id="count" value="0" min="0">
+
+  <button id="start">Start</button>
+  <button id="stop" disabled>Stop</button>
+
+  <script>
+    const ctx = new (window.AudioContext||window.webkitAudioContext)();
+    let timerId, beepsLeft;
+    document.getElementById('start').onclick = () => {
+      const f = +document.getElementById('freq').value;
+      const onT = +document.getElementById('onTime').value;
+      const offT = +document.getElementById('offTime').value;
+      const cnt = +document.getElementById('count').value;
+      beepsLeft = cnt;
+      document.getElementById('start').disabled = true;
+      document.getElementById('stop').disabled = false;
+
+      function doBeep() {
+        if (beepsLeft === 1) {
+          clearInterval(timerId);
+          document.getElementById('start').disabled = false;
+          document.getElementById('stop').disabled = true;
+        }
+        if (beepsLeft > 0) beepsLeft--;
+        // create & start oscillator
+        const osc = ctx.createOscillator();
+        osc.frequency.value = f;
+        osc.connect(ctx.destination);
+        osc.start();
+        setTimeout(() => {
+          osc.stop();
+          osc.disconnect();
+        }, onT);
+      }
+
+      // first beep immediately
+      doBeep();
+      // schedule repeats (onT + offT interval)
+      timerId = setInterval(() => {
+        if (cnt !== 0 && beepsLeft === 0) return;
+        doBeep();
+      }, onT + offT);
+    };
+
+    document.getElementById('stop').onclick = () => {
+      clearInterval(timerId);
+      document.getElementById('start').disabled = false;
+      document.getElementById('stop').disabled = true;
+    };
+  </script>
+</body>
+</html>
