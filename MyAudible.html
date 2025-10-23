@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Skydive Audible — Zone Config</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --brand:#1d7bff; --brand-pressed:#1763cc;
+      --ok:#22c55e; --ok-pressed:#199e4a;
+      --ink:#0e1222; --muted:#5b6a82;
+      --card:#ffffff; --surface:#f3f6fb; --line:#e6edf7;
+      --shadow:0 8px 28px rgba(0,0,0,.10);
+      --radius:14px; --gap:12px;
+    }
+    html,body{height:100%}
+    body{margin:0; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; color:var(--ink); background:var(--surface); -webkit-font-smoothing:antialiased;}
+
+    /* App bar */
+    .appbar{
+      position:sticky; top:0; z-index:5;
+      background:linear-gradient(90deg, #0b2b66 0%, #12419a 35%, #1d7bff 80%, #00d0ff 100%);
+      color:#fff; padding:16px 18px 14px; box-shadow:0 2px 12px rgba(13,30,80,.25);
+    }
+    .appbar .title{display:flex; align-items:center; gap:10px; font-weight:600; letter-spacing:.2px;}
+    .badge{display:inline-flex; align-items:center; gap:6px; background:rgba(255,255,255,.12); border:1px solid rgba(255,255,255,.18); padding:6px 10px; border-radius:999px; font-size:.82rem;}
+    .badge svg{opacity:.9}
+
+    .wrap{max-width:880px; margin:0 auto; padding:16px; display:flex; flex-direction:column; gap:14px}
+    .panel{background:var(--card); border-radius:var(--radius); box-shadow:var(--shadow); border:1px solid var(--line); padding:16px;}
+
+    /* Pre-connect hero */
+    .head{display:flex; flex-direction:column; align-items:center; gap:12px; text-align:center;}
+    .hero-icon{width:64px; height:64px; border-radius:18px; background:conic-gradient(from 180deg, #1d7bff, #00d0ff); display:grid; place-items:center; box-shadow:0 10px 28px rgba(29,123,255,.25);}
+    .head h1{margin:0; font-size:1.22rem; font-weight:600}
+    .sub{margin:0; color:var(--muted); font-size:.96rem}
+    .actions{display:flex; gap:10px; flex-wrap:wrap; justify-content:center}
+
+    button{
+      -webkit-tap-highlight-color:transparent; cursor:pointer; border:0; border-radius:12px;
+      padding:12px 16px; font-weight:600; font-size:.98rem; min-width:168px;
+      background:var(--brand); color:#fff; box-shadow:0 6px 18px rgba(29,123,255,.25);
+      transition:transform .02s ease, background .15s ease, box-shadow .15s ease;
+    }
+    button:hover{background:var(--brand-pressed)}
+    button:active{transform:translateY(1px)}
+    button:disabled{background:#a9c9ff; opacity:.85}
+
+    /* Status strip (hidden until connect) */
+    .status-strip{display:none; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap; margin-top:8px;}
+    .meter{display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:10px; background:#f0f7ff; border:1px solid #dbe9ff; color:#0c2b63}
+
+    /* Zones (hidden until connect) */
+    .zones{display:none; grid-template-columns:1fr; gap:var(--gap)}
+    @media (min-width:720px){ .zones{grid-template-columns:repeat(2,1fr)} }
+
+    .zone{background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px;}
+    .zone-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:8px}
+    .zone-title{font-weight:600; font-size:.96rem}
+
+    .grid{display:grid; grid-template-columns:1fr 1fr; gap:10px}
+    .field{display:flex; flex-direction:column; gap:6px}
+    label{font-size:.80rem; color:var(--muted)}
+    input[type="number"]{padding:11px 10px; border-radius:10px; border:1px solid #ccd9ee; font-size:.98rem; width:100%; box-sizing:border-box; background:#fbfdff;}
+    input[type="number"]:focus{outline:2px solid rgba(29,123,255,.24); border-color:#86b6ff}
+    input[type="number"]::-webkit-outer-spin-button, input[type="number"]::-webkit-inner-spin-button{margin:0}
+
+    .zone-actions{margin-top:8px; display:flex; justify-content:flex-end}
+    .ghost{background:#fff; color:var(--ink); border:1px solid #d7e3f5; box-shadow:none; min-width:104px;}
+
+    /* Footer actions (panel hidden until connect) */
+    #footerPanel{display:none}
+    .footer{display:flex; flex-direction:column; gap:10px; align-items:center; margin-top:8px;}
+    .footer .row{display:flex; gap:10px; flex-wrap:wrap; justify-content:center}
+    #read{min-width:140px}
+    #save{background:var(--ok); box-shadow:0 6px 18px rgba(34,197,94,.22); min-width:120px;}
+    #save:hover{background:var(--ok-pressed)}
+    #status{min-height:1.1em; font-size:.95rem; color:#174ea6; text-align:center}
+
+    @media (prefers-reduced-motion:reduce){ *{animation:none!important; transition:none!important} }
+  </style>
+</head>
+<body>
+  <!-- App bar -->
+  <div class="appbar" role="banner">
+    <div class="title">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 3a9 9 0 100 18 9 9 0 000-18Z" stroke="white" stroke-width="1.6" opacity=".9"/>
+        <path d="M12 6v6l4 2" stroke="white" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      Skydive Audible — Zone Config
+      <span class="badge" aria-live="polite" id="connBadge">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3 12h3m12 0h3M7 12a5 5 0 0110 0" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg>
+        Not connected
+      </span>
+    </div>
+  </div>
+
+  <main class="wrap">
+    <!-- Connection hero (only visible pre-connect) -->
+    <section class="panel" id="connectPanel">
+      <div class="head">
+        <div class="hero-icon" aria-hidden="true">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+            <path d="M12 4v6l4 2" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="12" cy="12" r="8.5" stroke="#fff" stroke-width="1.2" opacity=".9"/>
+          </svg>
+        </div>
+        <h1>Pair Your Audible</h1>
+        <p class="sub">Tap connect, select your device, and you’re ready to set jump zones.</p>
+
+        <div class="actions">
+          <button id="connect">Connect to Device</button>
+        </div>
+
+        <!-- Status strip (battery; shown after connect) -->
+        <div class="status-strip" id="statusStrip">
+          <div class="meter" id="batteryMeter">
+            <svg width="36" height="18" viewBox="0 0 36 18" aria-hidden="true">
+              <rect x="1" y="3" width="30" height="12" rx="2" ry="2" fill="none" stroke="#123d8f" stroke-width="2"/>
+              <rect x="32" y="6" width="3" height="6" rx="1" ry="1" fill="#123d8f"/>
+              <rect id="batteryLevel" x="3" y="5" width="0" height="8" rx="1" ry="1" fill="#22c55e"/>
+            </svg>
+            <span><strong id="battery">--%</strong> battery</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Zones (hidden until connect) -->
+    <section id="controls" class="zones">
+      <div class="zone" data-zone="1">
+        <div class="zone-head"><div class="zone-title">Zone 1</div></div>
+        <div class="grid">
+          <div class="field"><label for="thr1">Threshold (ft)</label><input id="thr1" type="number" inputmode="numeric" pattern="[0-9]*"/></div>
+          <div class="field"><label for="on1">Beep-On (ms)</label><input id="on1" type="number" inputmode="numeric" pattern="[0-9]*"/></div>
+          <div class="field"><label for="off1">Beep-Off (ms)</label><input id="off1" type="number" inputmode="numeric" pattern="[0-9]*"/></div>
+        </div>
+        <div class="zone-actions"><button class="ghost play-btn" type="button">Test</button></div>
+      </div>
+
+      <div class="zone" data-zone="2">
+        <div class="zone-head"><div class="zone-title">Zone 2</div></div>
+        <div class="grid">
+          <div class="field"><label for="thr2">Threshold (ft)</label><input id="thr2" type="number" inputmode="numeric" pattern="[0-9]*"/></div>
+          <div class="field"><label for="on2">Beep-On (ms)</label><input id="on2" type="number" inputmode="numeric" pattern="[0-9]*"/></div>
+          <div class="field"><label for="off2">Beep-Off (ms)</label><input id="off2" type="number" inputmode="numeric" pattern="[0-9]*"/></div>
+        </div>
+        <div class="zone-actions"><button class="ghost play-btn" type="button">Test</button></div>
+      </div>
+
+      <div class="zone" data-zone="3">
+        <div class="zone-head"><div class="zone-title">Zone 3</div></div>
+        <div class="grid">
+          <div class="field"><label for="thr3">Threshold (ft)</label><input id="thr3" type="number" inputmode="numeric" pattern="[0-9]*"/></div>
+          <div class="field"><label for="on3">Beep-On (ms)</label><input id="on3" type="number" inputmode="numeric" pattern="[0-9]*"/></div>
+          <div class="field"><label for="off3">Beep-Off (ms)</label><input id="off3" type="number" inputmode="numeric" pattern="[0-9]*"/></div>
+        </div>
+        <div class="zone-actions"><button class="ghost play-btn" type="button">Test</button></div>
+      </div>
+
+      <div class="zone" data-zone="4">
+        <div class="zone-head"><div class="zone-title">Zone 4</div></div>
+        <div class="grid">
+          <div class="field"><label for="thr4">Threshold (ft)</label><input id="thr4" type="number" inputmode="numeric" pattern="[0-9]*"/></div>
+          <div class="field"><label for="on4">Beep-On (ms)</label><input id="on4" type="number" inputmode="numeric" pattern="[0-9]*"/></div>
+          <div class="field"><label for="off4">Beep-Off (ms)</label><input id="off4" type="number" inputmode="numeric" pattern="[0-9]*"/></div>
+        </div>
+        <div class="zone-actions"><button class="ghost play-btn" type="button">Test</button></div>
+      </div>
+    </section>
+
+    <!-- Footer actions panel (hidden until connect) -->
+    <section class="panel footer" id="footerPanel">
+      <div class="row">
+        <button id="read" type="button">Read Values</button>
+        <button id="save" type="button">Save</button>
+      </div>
+      <p id="status" aria-live="polite"></p>
+    </section>
+  </main>
+
+  <script>
+    // === BLE UUIDs ===
+    const serviceUuid = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
+    const charUuids = {
+      thr:  ['0000a001-1212-efde-1523-785fef13d123','0000a002-1212-efde-1523-785fef13d123','0000a003-1212-efde-1523-785fef13d123','0000a004-1212-efde-1523-785fef13d123'],
+      on:   ['0000b001-1212-efde-1523-785fef13d123','0000b002-1212-efde-1523-785fef13d123','0000b003-1212-efde-1523-785fef13d123','0000b004-1212-efde-1523-785fef13d123'],
+      off:  ['0000c001-1212-efde-1523-785fef13d123','0000c002-1212-efde-1523-785fef13d123','0000c003-1212-efde-1523-785fef13d123','0000c004-1212-efde-1523-785fef13d123'],
+      batt: '0000d001-1212-efde-1523-785fef13d123'
+    };
+
+    let device, server, svc;
+    const chars = { thr:[], on:[], off:[], batt:null };
+    const $ = sel => document.querySelector(sel);
+
+    // Reused AudioContext
+    let audioCtx = null;
+    function ensureAudioCtx(){
+      if(!audioCtx){
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new Ctx();
+      }
+      if(audioCtx.state === 'suspended'){ audioCtx.resume(); }
+      return audioCtx;
+    }
+
+    // Short test pattern
+    function playPattern(onMs, offMs){
+      const ctx = ensureAudioCtx();
+      const totalMs = 3000, endAt = ctx.currentTime + totalMs/1000;
+      let t = ctx.currentTime;
+      function pulse(){
+        if(t >= endAt) return;
+        const osc = ctx.createOscillator(), gain = ctx.createGain();
+        osc.type = 'square'; osc.frequency.value = 2750; gain.gain.value = 0.2;
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(t);
+        const onS = Math.max(0.01, onMs/1000), offS = Math.max(0, offMs/1000);
+        osc.stop(t + onS); t += onS + offS;
+        if(t < endAt) setTimeout(pulse, (onS + offS)*1000);
+      }
+      pulse();
+    }
+
+    // Battery UI
+    function updateBattery(pct){
+      const level = $('#batteryLevel');
+      pct = Math.max(0, Math.min(100, parseInt(pct || 0, 10)));
+      level.setAttribute('width', Math.round((pct/100)*26));
+      level.setAttribute('fill', pct < 30 ? '#e11d48' : (pct < 60 ? '#f59e0b' : '#22c55e'));
+      $('#battery').textContent = pct + '%';
+    }
+    async function readBattery(){
+      if (!chars.batt) return;
+      try{
+        const v = new TextDecoder().decode(await chars.batt.readValue());
+        updateBattery(v);
+      }catch(e){ console.warn('Battery read failed', e); }
+    }
+
+    // Visibility-aware polling
+    let batteryTimer = null;
+    function startBatteryPolling(){ if(!batteryTimer) batteryTimer = setInterval(readBattery, 15000); }
+    function stopBatteryPolling(){ if(batteryTimer){ clearInterval(batteryTimer); batteryTimer=null; } }
+    document.addEventListener('visibilitychange', ()=> document.hidden ? stopBatteryPolling() : startBatteryPolling(), {passive:true});
+
+    // Connect flow
+    $('#connect').addEventListener('click', async ()=>{
+      try{
+        device = await navigator.bluetooth.requestDevice({ filters: [{ services:[serviceUuid] }], optionalServices:[serviceUuid] });
+        server = await device.gatt.connect();
+        svc    = await server.getPrimaryService(serviceUuid);
+
+        for (let i=0;i<4;i++){
+          chars.thr[i] = await svc.getCharacteristic(charUuids.thr[i]);
+          chars.on[i]  = await svc.getCharacteristic(charUuids.on[i]);
+          chars.off[i] = await svc.getCharacteristic(charUuids.off[i]);
+        }
+
+        // Optional: battery
+        try{
+          chars.batt = await svc.getCharacteristic(charUuids.batt);
+          $('#statusStrip').style.display = 'flex';
+          await readBattery();
+          startBatteryPolling();
+        }catch(_){ /* optional */ }
+
+        // Reveal UI AFTER connecting
+        $('#controls').style.display = 'grid';
+        $('#footerPanel').style.display = 'block';
+        $('#status').textContent = 'Connected!';
+        $('#connBadge').innerHTML = `
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+            <path d="M4 12h3m10 0h3M8 12a4 4 0 018 0" stroke="#00ffbf" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+          Connected
+        `;
+      }catch(e){
+        console.error(e);
+        $('#status').textContent = e;
+      }
+    }, {passive:true});
+
+    // Read
+    $('#read').addEventListener('click', async ()=>{
+      try{
+        for (let i=0;i<4;i++){
+          let v = new TextDecoder().decode(await chars.thr[i].readValue());
+          $('#thr'+(i+1)).value = parseFloat(v);
+          v = new TextDecoder().decode(await chars.on[i].readValue());
+          $('#on'+(i+1)).value  = parseFloat(v);
+          v = new TextDecoder().decode(await chars.off[i].readValue());
+          $('#off'+(i+1)).value = parseFloat(v);
+        }
+        await readBattery();
+        $('#status').textContent = '✔️ Read complete';
+      }catch(e){ console.error(e); $('#status').textContent = e; }
+    });
+
+    // Save
+    $('#save').addEventListener('click', async ()=>{
+      try{
+        for (let i=0;i<4;i++){
+          await chars.thr[i].writeValue(new TextEncoder().encode($('#thr'+(i+1)).value));
+          await chars.on[i].writeValue(new TextEncoder().encode($('#on'+(i+1)).value));
+          await chars.off[i].writeValue(new TextEncoder().encode($('#off'+(i+1)).value));
+        }
+        $('#status').textContent = '✔️ Saved';
+      }catch(e){ console.error(e); $('#status').textContent = e; }
+    });
+
+    // Test buttons
+    document.querySelectorAll('.play-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const z = btn.closest('[data-zone]').dataset.zone;
+        const onVal  = parseInt($('#on'+z).value,10)  || 0;
+        const offVal = parseInt($('#off'+z).value,10) || 0;
+        if (onVal <= 0){ alert('Enter a Beep-On duration to test.'); return; }
+        playPattern(onVal, offVal);
+      });
+    });
+
+    // iOS audio unlock
+    window.addEventListener('touchstart', ensureAudioCtx, {once:true, passive:true});
+  </script>
+</body>
+</html>
