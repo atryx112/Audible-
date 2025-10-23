@@ -1,0 +1,252 @@
+#include <Wire.h>
+#include <Adafruit_BMP280.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLEDescriptor.h>
+#include <Preferences.h>
+#include <esp_wifi.h>
+#include <Arduino.h>
+
+// === Pins & Constants ===
+const int BUZZER_PIN      = 2;
+const int SDA_PIN         = 9;
+const int SCL_PIN         = 21;
+const int BOOT_BUTTON_PIN = 0;
+
+constexpr float  SEA_LEVEL_PRESS      = 1013.25f;
+constexpr unsigned long LONG_PRESS_MS    = 3000;
+constexpr unsigned long LOOP_INTERVAL_MS = 250;
+constexpr int    BUZZER_FREQ          = 2750;
+constexpr int    BUZZER_RES           = 13;
+constexpr int    BUZZER_DUTY          = 4095;
+
+// === State & storage ===
+Adafruit_BMP280 bmp;
+Preferences      prefs;
+float            baselineAlt = 0.0f;
+float            thresholds[4], beepOn[4], beepOff[4];
+float            last_delta_ft = 0.0f;
+
+// NVS keys & human names
+const char* thrKeys[4]  = {"t1","t2","t3","t4"};
+const char* onKeys [4]  = {"o1","o2","o3","o4"};
+const char* offKeys[4]  = {"f1","f2","f3","f4"};
+const char* thrNames[4] = {
+  "Zone 1 threshold (ft)",
+  "Zone 2 threshold (ft)",
+  "Zone 3 threshold (ft)",
+  "Zone 4 threshold (ft)"
+};
+const char* onNames[4]  = {
+  "Zone 1 beep‑on (ms)",
+  "Zone 2 beep‑on (ms)",
+  "Zone 3 beep‑on (ms)",
+  "Zone 4 beep‑on (ms)"
+};
+const char* offNames[4] = {
+  "Zone 1 beep‑off (ms)",
+  "Zone 2 beep‑off (ms)",
+  "Zone 3 beep‑off (ms)",
+  "Zone 4 beep‑off (ms)"
+};
+
+// BLE UUIDs
+#define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+static const char* THR_UUIDS[4] = {
+  "0000a001-1212-efde-1523-785fef13d123",
+  "0000a002-1212-efde-1523-785fef13d123",
+  "0000a003-1212-efde-1523-785fef13d123",
+  "0000a004-1212-efde-1523-785fef13d123"
+};
+static const char* ON_UUIDS[4] = {
+  "0000b001-1212-efde-1523-785fef13d123",
+  "0000b002-1212-efde-1523-785fef13d123",
+  "0000b003-1212-efde-1523-785fef13d123",
+  "0000b004-1212-efde-1523-785fef13d123"
+};
+static const char* OFF_UUIDS[4] = {
+  "0000c001-1212-efde-1523-785fef13d123",
+  "0000c002-1212-efde-1523-785fef13d123",
+  "0000c003-1212-efde-1523-785fef13d123",
+  "0000c004-1212-efde-1523-785fef13d123"
+};
+
+// Characteristic pointers
+BLECharacteristic* thrChar[4];
+BLECharacteristic* onChar [4];
+BLECharacteristic* offChar[4];
+
+// —––– Helpers —––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+void beep(int ms) {
+  ledcWrite(BUZZER_PIN, BUZZER_DUTY);
+  delay(ms);
+  ledcWrite(BUZZER_PIN, 0);
+}
+
+float readAltitudeOnce() {
+  bmp.takeForcedMeasurement();
+  return bmp.readAltitude(SEA_LEVEL_PRESS);
+}
+
+// Generic BLE write callback
+struct ParamCB : public BLECharacteristicCallbacks {
+  float*       arr;
+  const char*  key;
+  const char*  name;
+  int          idx;
+  ParamCB(float* a,const char* k,const char* n,int i)
+    : arr(a), key(k), name(n), idx(i) {}
+  void onWrite(BLECharacteristic* ch) override {
+    float v = String(ch->getValue().c_str()).toFloat();
+    arr[idx] = v;
+    prefs.begin("params", false);
+    prefs.putFloat(key, v);
+    prefs.end();
+    Serial.printf("🔧 %s = %.0f\n", name, v);
+  }
+};
+
+// BLE server callbacks
+class MyServerCB : public BLEServerCallbacks {
+public:
+  void onConnect(BLEServer*) override  { Serial.println("✅ BLE client connected"); }
+  void onDisconnect(BLEServer* s) override {
+    Serial.println("❌ BLE client disconnected");
+    s->getAdvertising()->start();
+  }
+};
+
+void setup() {
+  // 1) Serial sanity check
+  Serial.begin(115200);
+  delay(500);
+  Serial.println("✅ code is running!");
+
+  // 2) Sensors & baseline
+  Wire.begin(SDA_PIN, SCL_PIN);
+  esp_wifi_stop();           // power‑save
+  if (!bmp.begin(0x76) && !bmp.begin(0x77)) {
+    Serial.println("❌ BMP280 missing!");
+    while (1) delay(100);
+  }
+  bmp.setSampling(
+    Adafruit_BMP280::MODE_FORCED,
+    Adafruit_BMP280::SAMPLING_X2,
+    Adafruit_BMP280::SAMPLING_X4,
+    Adafruit_BMP280::FILTER_X4
+  );
+  baselineAlt = readAltitudeOnce();
+  Serial.println("🎯 Baseline altitude calibrated");
+
+  ledcAttach(BUZZER_PIN, BUZZER_FREQ, BUZZER_RES);
+
+  // 3) Load persisted or defaults
+  float dthr[4] = {1000,3000,5500,7000},
+        don [4] = {150,100,100,5000},
+        doff[4] = {600,20,50,0};
+
+  prefs.begin("params", false);
+  for (int i = 0; i < 4; i++) {
+    thresholds[i] = prefs.getFloat(thrKeys[i], dthr[i]);
+    beepOn     [i] = prefs.getFloat(onKeys [i], don[i]);
+    beepOff    [i] = prefs.getFloat(offKeys[i], doff[i]);
+    Serial.printf("📈 %s=%.0fft, %s=%.0fms, %s=%.0fms\n",
+      thrNames[i], thresholds[i],
+      onNames [i], beepOn[i],
+      offNames[i], beepOff[i]
+    );
+  }
+  prefs.end();
+
+  // 4) BLE setup
+  BLEDevice::init("MyAudible");
+  BLEServer* server = BLEDevice::createServer();
+  server->setCallbacks(new MyServerCB());
+
+  // ***** CHANGE HERE: reserve ample handles (≥ 49) *****
+  BLEService* svc = server->createService(BLEUUID(SERVICE_UUID), 50);
+  // *****************************************************
+
+  // 5) Create all 12 characteristics in a loop
+  for (int i = 0; i < 4; i++) {
+    // threshold
+    thrChar[i] = svc->createCharacteristic(
+      THR_UUIDS[i],
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE
+    );
+    thrChar[i]->setValue(String(thresholds[i]));
+    thrChar[i]->setCallbacks(new ParamCB(thresholds, thrKeys[i], thrNames[i], i));
+    { auto d = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
+      d->setValue(thrNames[i]);
+      thrChar[i]->addDescriptor(d);
+    }
+    Serial.printf("Created %s\n", THR_UUIDS[i]);
+
+    // beep‑on
+    onChar[i] = svc->createCharacteristic(
+      ON_UUIDS[i],
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE
+    );
+    onChar[i]->setValue(String(beepOn[i]));
+    onChar[i]->setCallbacks(new ParamCB(beepOn, onKeys[i], onNames[i], i));
+    { auto d = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
+      d->setValue(onNames[i]);
+      onChar[i]->addDescriptor(d);
+    }
+    Serial.printf("Created %s\n", ON_UUIDS[i]);
+
+    // beep‑off
+    offChar[i] = svc->createCharacteristic(
+      OFF_UUIDS[i],
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE
+    );
+    offChar[i]->setValue(String(beepOff[i]));
+    offChar[i]->setCallbacks(new ParamCB(beepOff, offKeys[i], offNames[i], i));
+    { auto d = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
+      d->setValue(offNames[i]);
+      offChar[i]->addDescriptor(d);
+    }
+    Serial.printf("Created %s\n", OFF_UUIDS[i]);
+  }
+
+  svc->start();
+  auto adv = server->getAdvertising();
+  adv->addServiceUUID(svc->getUUID());
+  adv->setScanResponse(true);
+  adv->start();
+  Serial.println("📡 Advertising as MyAudible");
+}
+
+void loop() {
+  // long‑press to recalibrate
+  static bool lastBtn = HIGH;
+  static unsigned long pressStart = 0;
+  bool btn = digitalRead(BOOT_BUTTON_PIN);
+  if (btn == LOW && lastBtn == HIGH) pressStart = millis();
+  if (btn == LOW && (millis() - pressStart) >= LONG_PRESS_MS) {
+    baselineAlt = readAltitudeOnce();
+    Serial.println("🔄 Baseline recalibrated");
+    beep(200); delay(100); beep(100);
+    while (digitalRead(BOOT_BUTTON_PIN) == LOW) delay(10);
+  }
+  lastBtn = btn;
+
+  // descent‑only edge detection + beep patterns
+  float delta_ft = (readAltitudeOnce() - baselineAlt) * 3.28084f;
+  for (int i = 0; i < 4; i++) {
+    if (last_delta_ft >= thresholds[i] && delta_ft < thresholds[i]) {
+      if (beepOff[i] == 0) {
+        beep((int)beepOn[i]);
+      } else {
+        int cnt = ceil(5000.0f / (beepOn[i] + beepOff[i]));
+        for (int j = 0; j < cnt; j++) {
+          beep((int)beepOn[i]);
+          delay((int)beepOff[i]);
+        }
+      }
+    }
+  }
+  last_delta_ft = delta_ft;
+  delay(LOOP_INTERVAL_MS);
+}

@@ -1,0 +1,7 @@
+1x Lilygo T7 S3
+1x BMP280
+1x Piezzo Buzzer 85db +
+1x Battery JST1.25mm 350mAh
+Wires 30 or 28 AWG 
+Dimensions for SLim
+55x42x2 mm

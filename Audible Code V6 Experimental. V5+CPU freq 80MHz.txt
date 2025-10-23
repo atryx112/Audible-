@@ -1,0 +1,316 @@
+#include <Wire.h>
+#include <Adafruit_BMP280.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLEDescriptor.h>
+#include <Preferences.h>
+#include <esp_wifi.h>
+#include <esp_sleep.h>
+#include <Arduino.h>
+#include <math.h>
+
+// === Pins & Constants ===
+const int BUZZER_PIN      = 1;
+const int SDA_PIN         = 9;
+const int SCL_PIN         = 21;
+const int BOOT_BUTTON_PIN = 0;
+const int BATTERY_PIN     = 2;
+
+constexpr float  SEA_LEVEL_PRESS         = 1013.25f;
+constexpr unsigned long LONG_PRESS_MS    = 3000;
+constexpr unsigned long LOOP_INTERVAL_MS = 250;
+constexpr int    BUZZER_FREQ             = 2750;
+constexpr int    BUZZER_RES              = 13;
+constexpr int    BUZZER_DUTY             = 4095;
+
+// ---- Low-power/arming parameters ----
+constexpr float    GROUND_BAND_FT   = 40.0f;
+constexpr uint64_t SLEEP_30S_US     = 30ULL * 1000000ULL;
+constexpr unsigned long CONFIG_AWAKE_MS = 5UL * 60UL * 1000UL;
+
+// === State & storage ===
+Adafruit_BMP280 bmp;
+Preferences      prefs;
+float            baselineAlt = 0.0f;
+float            thresholds[4], beepOn[4], beepOff[4];
+float            last_delta_ft = 0.0f;
+
+// NVS keys
+const char* thrKeys[4] = {"t1","t2","t3","t4"};
+const char* onKeys [4] = {"o1","o2","o3","o4"};
+const char* offKeys[4] = {"f1","f2","f3","f4"};
+const char* BASE_KEY   = "baseline_m";
+
+// BLE UUIDs
+#define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+static const char* THR_UUIDS[4] = {
+  "0000a001-1212-efde-1523-785fef13d123",
+  "0000a002-1212-efde-1523-785fef13d123",
+  "0000a003-1212-efde-1523-785fef13d123",
+  "0000a004-1212-efde-1523-785fef13d123"
+};
+static const char* ON_UUIDS[4] = {
+  "0000b001-1212-efde-1523-785fef13d123",
+  "0000b002-1212-efde-1523-785fef13d123",
+  "0000b003-1212-efde-1523-785fef13d123",
+  "0000b004-1212-efde-1523-785fef13d123"
+};
+static const char* OFF_UUIDS[4] = {
+  "0000c001-1212-efde-1523-785fef13d123",
+  "0000c002-1212-efde-1523-785fef13d123",
+  "0000c003-1212-efde-1523-785fef13d123",
+  "0000c004-1212-efde-1523-785fef13d123"
+};
+
+// Characteristic pointers
+BLECharacteristic* thrChar[4] = {nullptr,nullptr,nullptr,nullptr};
+BLECharacteristic* onChar [4] = {nullptr,nullptr,nullptr,nullptr};
+BLECharacteristic* offChar[4] = {nullptr,nullptr,nullptr,nullptr};
+BLECharacteristic* battChar   = nullptr;
+
+// ==== Mode flags ====
+bool   armed          = false;
+bool   bleEnabled     = false;
+bool   wakeFromButton = false;
+unsigned long configExpireMs = 0;
+
+// Forward decls
+void goDeepSleep(uint64_t us);
+void startBLE();
+void stopBLE();
+
+// —––– Helpers —––––––––––––––––––––––––––––––––––––––––––––––––––––––––
+void beep(int ms) {
+  ledcWrite(BUZZER_PIN, BUZZER_DUTY);
+  delay(ms);
+  ledcWrite(BUZZER_PIN, 0);
+}
+
+float readAltitudeOnce() {
+  bmp.takeForcedMeasurement();
+  return bmp.readAltitude(SEA_LEVEL_PRESS);
+}
+
+int getBatteryPercent() {
+  float mv = analogReadMilliVolts(BATTERY_PIN);
+  float voltage = (mv / 1000.0f) * 2.0f;
+  const float minV = 3.35f, maxV = 4.20f;
+  if (voltage < minV) voltage = minV;
+  if (voltage > maxV) voltage = maxV;
+  float percent = (voltage - minV) / (maxV - minV) * 100.0f;
+  return (int)roundf(percent);
+}
+
+inline bool inGroundBand(float delta_ft) {
+  return fabsf(delta_ft) <= GROUND_BAND_FT;
+}
+
+float maxThreshold() {
+  float m = thresholds[0];
+  for (int i=1;i<4;i++) if (thresholds[i] > m) m = thresholds[i];
+  return m;
+}
+
+struct ParamCB : public BLECharacteristicCallbacks {
+  float* arr;
+  const char* key;
+  int idx;
+  ParamCB(float* a,const char* k,int i) : arr(a), key(k), idx(i) {}
+  void onWrite(BLECharacteristic* ch) override {
+    float v = String(ch->getValue().c_str()).toFloat();
+    arr[idx] = v;
+    prefs.begin("params", false);
+    prefs.putFloat(key, v);
+    prefs.end();
+  }
+};
+
+class MyServerCB : public BLEServerCallbacks {
+public:
+  void onConnect(BLEServer*) override {}
+  void onDisconnect(BLEServer* s) override {
+    s->getAdvertising()->start();
+  }
+};
+
+void setup() {
+  setCpuFrequencyMhz(80);
+
+  pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
+
+  esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+  if (cause == ESP_SLEEP_WAKEUP_EXT0) wakeFromButton = true;
+
+  Wire.begin(SDA_PIN, SCL_PIN);
+  esp_wifi_stop();
+  bmp.begin(0x76) || bmp.begin(0x77);
+  bmp.setSampling(
+    Adafruit_BMP280::MODE_FORCED,
+    Adafruit_BMP280::SAMPLING_X2,
+    Adafruit_BMP280::SAMPLING_X4,
+    Adafruit_BMP280::FILTER_X4
+  );
+
+  ledcAttach(BUZZER_PIN, BUZZER_FREQ, BUZZER_RES);
+
+  analogReadResolution(12);
+  analogSetAttenuation(ADC_11db);
+
+  float dthr[4] = {1000,3000,5500,7000},
+        don [4] = {150,100,100,5000},
+        doff[4] = {600,20,50,0};
+
+  prefs.begin("params", false);
+  for (int i = 0; i < 4; i++) {
+    thresholds[i] = prefs.getFloat(thrKeys[i], dthr[i]);
+    beepOn[i]     = prefs.getFloat(onKeys [i], don[i]);
+    beepOff[i]    = prefs.getFloat(offKeys[i], doff[i]);
+  }
+  if (prefs.isKey(BASE_KEY)) {
+    baselineAlt = prefs.getFloat(BASE_KEY, readAltitudeOnce());
+  } else {
+    baselineAlt = readAltitudeOnce();
+    prefs.putFloat(BASE_KEY, baselineAlt);
+  }
+  prefs.end();
+
+  if (wakeFromButton) {
+    startBLE();
+    configExpireMs = millis() + CONFIG_AWAKE_MS;
+    beep(90);
+    wakeFromButton = false;
+  }
+}
+
+void loop() {
+  static bool lastBtn = HIGH;
+  static unsigned long pressStart = 0;
+  bool btn = digitalRead(BOOT_BUTTON_PIN);
+  if (btn == LOW && lastBtn == HIGH) pressStart = millis();
+  if (btn == LOW && (millis() - pressStart) >= LONG_PRESS_MS) {
+    baselineAlt = readAltitudeOnce();
+    prefs.begin("params", false);
+    prefs.putFloat(BASE_KEY, baselineAlt);
+    prefs.end();
+    beep(200); delay(100); beep(100);
+    while (digitalRead(BOOT_BUTTON_PIN) == LOW) delay(10);
+  }
+  lastBtn = btn;
+
+  float delta_ft = (readAltitudeOnce() - baselineAlt) * 3.28084f;
+
+  if (!armed && (fabsf(delta_ft) > maxThreshold())) {
+    armed = true;
+    for (int k = 0; k < 3; ++k) { beep(100); delay(120); }
+  } else if (armed && inGroundBand(delta_ft)) {
+    armed = false;
+  }
+
+  if (!armed && !bleEnabled && inGroundBand(delta_ft)) {
+    goDeepSleep(SLEEP_30S_US);
+  }
+
+  if (armed) {
+    for (int i = 0; i < 4; i++) {
+      if (thresholds[i] <= GROUND_BAND_FT) continue;
+      if (last_delta_ft >= thresholds[i] && delta_ft < thresholds[i]) {
+        if (beepOff[i] == 0) {
+          beep((int)beepOn[i]);
+        } else {
+          int cnt = ceil(5000.0f / (beepOn[i] + beepOff[i]));
+          for (int j = 0; j < cnt; j++) {
+            beep((int)beepOn[i]);
+            delay((int)beepOff[i]);
+          }
+        }
+      }
+    }
+  }
+  last_delta_ft = delta_ft;
+
+  if (bleEnabled && (millis() > configExpireMs)) {
+    stopBLE();
+  }
+
+  if (bleEnabled && battChar != nullptr) {
+    int pct = getBatteryPercent();
+    battChar->setValue(String(pct));
+    battChar->notify();
+  }
+
+  delay(LOOP_INTERVAL_MS);
+}
+
+void goDeepSleep(uint64_t us) {
+  ledcWrite(BUZZER_PIN, 0);
+  if (bleEnabled) stopBLE();
+
+  bmp.setSampling(Adafruit_BMP280::MODE_SLEEP);
+
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+  esp_sleep_enable_timer_wakeup(us);
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)BOOT_BUTTON_PIN, 0);
+  esp_deep_sleep_start();
+}
+
+void startBLE() {
+  if (bleEnabled) return;
+
+  BLEDevice::init("MyAudible");
+  BLEServer* server = BLEDevice::createServer();
+  server->setCallbacks(new MyServerCB());
+
+  BLEService* svc = server->createService(BLEUUID(SERVICE_UUID), 50);
+
+  for (int i = 0; i < 4; i++) {
+    thrChar[i] = svc->createCharacteristic(
+      THR_UUIDS[i],
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE
+    );
+    thrChar[i]->setValue(String(thresholds[i]));
+    thrChar[i]->setCallbacks(new ParamCB(thresholds, thrKeys[i], i));
+
+    onChar[i] = svc->createCharacteristic(
+      ON_UUIDS[i],
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE
+    );
+    onChar[i]->setValue(String(beepOn[i]));
+    onChar[i]->setCallbacks(new ParamCB(beepOn, onKeys[i], i));
+
+    offChar[i] = svc->createCharacteristic(
+      OFF_UUIDS[i],
+      BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_WRITE
+    );
+    offChar[i]->setValue(String(beepOff[i]));
+    offChar[i]->setCallbacks(new ParamCB(beepOff, offKeys[i], i));
+  }
+
+  static const char* BATT_UUID = "0000d001-1212-efde-1523-785fef13d123";
+  battChar = svc->createCharacteristic(
+    BATT_UUID,
+    BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
+  );
+  battChar->setValue(String(getBatteryPercent()));
+  {
+    auto d = new BLEDescriptor(BLEUUID((uint16_t)0x2901));
+    d->setValue("Battery (%)");
+    battChar->addDescriptor(d);
+  }
+
+  svc->start();
+  auto adv = server->getAdvertising();
+  adv->addServiceUUID(svc->getUUID());
+  adv->setScanResponse(true);
+  adv->start();
+
+  bleEnabled = true;
+}
+
+void stopBLE() {
+  if (!bleEnabled) return;
+  BLEDevice::deinit(true);
+  for (int i=0;i<4;i++){ thrChar[i]=nullptr; onChar[i]=nullptr; offChar[i]=nullptr; }
+  battChar = nullptr;
+  bleEnabled = false;
+}

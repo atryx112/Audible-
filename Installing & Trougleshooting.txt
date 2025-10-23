@@ -1,0 +1,42 @@
+ESP32 - BMP2280
+--------------------
+GND --- GND
+3V3 --- VDD
+GPIO 21 --- CLK
+GPIO 9 --- Data 
+
+ESP32 - Buzzer
+--------------------
+GND --- GND
+GPIO 1 --- +
+Soldered directly on the board 
+Never GPIO 2 because it's connected to battery reading
+
+
+Case screw M2x5 mm
+Wires 28-30 AWG
+
+Code
+---------------------------------
+Arduino IDE
+Adafruit BMp280  installed 
+Esp32S3 Dev Board 
+
+Troubleshoot
+---------------------------------
+Open Lid
+Disconnect
+Press BOOT + RST button if the COM doesn't show up 
+Connect while keeping the boot button pressed 
+1.Compile the code first
+2.Upload the code after  
+
+
+Online Configurator 
+==================================
+Pythoon 3.10  Installed 
+Google Chrome or Edge 
+Bluefy for iPhone 
+Pair 
+Red Values - Modify - Write 
+
